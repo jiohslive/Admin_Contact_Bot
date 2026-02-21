@@ -1,13 +1,13 @@
-import os
-import json
 import asyncio
+import json
+import os
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ChatAction
+from telegram.error import Forbidden, BadRequest
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
-from telegram.error import Forbidden, BadRequest
 
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -16,30 +16,16 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 if not BOT_TOKEN or not ADMIN_ID:
     raise RuntimeError("Please set BOT_TOKEN and ADMIN_ID in env variables")
 
-USERS_FILE = "users.json"
-
-# ========= STORAGE =========
-BLOCKED_USERS = set()
-ADMIN_REPLY_MAP = {}  # admin_msg_id -> user_id
-
-# ========= USERS DB =========
+# ========= USER DB =========
 def load_users():
     if not os.path.exists(USERS_FILE):
         return set()
     with open(USERS_FILE, "r") as f:
         return set(json.load(f))
 
-def save_users(users: set):
+def save_users(users):
     with open(USERS_FILE, "w") as f:
         json.dump(list(users), f)
-
-# ========= AUTO DELETE (ONLY MESSAGE SENT) =========
-async def auto_delete(context, chat_id, msg_id, delay=5):
-    await asyncio.sleep(delay)
-    try:
-        await context.bot.delete_message(chat_id, msg_id)
-    except:
-        pass
 
 # ========= START =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -50,58 +36,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📩 Message Admin", callback_data="msg_admin")]
     ])
+
     await update.message.reply_text(
-        "Welcome! 👋\n\nTap the button below to message the admin.",
+        "Welcome! 👋\n\nTap button to message admin.",
         reply_markup=kb
     )
 
-# ========= BUTTON =========
-async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ========= USER → ADMIN =========
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "msg_admin":
-        await query.message.reply_text("Type your message below 👇")
+    await query.message.reply_text("Type your message below 👇")
 
-# ========= USER MESSAGE =========
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-
-    if user.id in BLOCKED_USERS:
+    uid = update.effective_user.id
+    if uid in BLOCKED_USERS:
         return
 
     users = load_users()
-    users.add(user.id)
+    users.add(uid)
     save_users(users)
 
-    mention = f"<a href='tg://user?id={user.id}'>{user.full_name}</a>"
-
-    # Typing indicator to admin
     await context.bot.send_chat_action(chat_id=ADMIN_ID, action=ChatAction.TYPING)
 
-    sent = await context.bot.copy_message(
+    text = update.message.text
+
+    await context.bot.send_message(
         chat_id=ADMIN_ID,
-        from_chat_id=update.effective_chat.id,
-        message_id=update.message.message_id
+        text=f"📩 New Message From\n"
+             f"👤 User: @{update.effective_user.username}\n"
+             f"🆔 User ID: {uid}\n\n"
+             f"💬 {text}"
     )
 
-    info = await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=(
-            "📩 <b>New Message From</b>\n"
-            f"👤 User: {mention}\n"
-            f"🆔 User ID: <code>{user.id}</code>\n\n"
-            "💬 <b>User Message 👇</b>"
-        ),
-        parse_mode="HTML"
-    )
+    sent = await update.message.reply_text("✅ Message sent To Admin")
+    await asyncio.sleep(3)
+    try:
+        await sent.delete()
+    except:
+        pass
 
-    ADMIN_REPLY_MAP[sent.message_id] = user.id
-    ADMIN_REPLY_MAP[info.message_id] = user.id
-
-    status = await update.message.reply_text("✅ Message Sent")
-    asyncio.create_task(auto_delete(context, update.effective_chat.id, status.message_id, 5))
-
-# ========= ADMIN REPLY =========
+# ========= ADMIN → USER REPLY =========
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -109,18 +84,30 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
         return
 
-    replied_id = update.message.reply_to_message.message_id
+    reply_msg = update.message.reply_to_message.text or ""
+    uid = None
 
-    if replied_id in ADMIN_REPLY_MAP:
-        user_id = ADMIN_REPLY_MAP[replied_id]
+    for line in reply_msg.splitlines():
+        if "User ID:" in line:
+            try:
+                uid = int(line.split("User ID:")[1].strip())
+            except:
+                pass
 
-        await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+    if not uid:
+        await update.message.reply_text("❌ User ID not found.")
+        return
 
-        await context.bot.copy_message(
-            chat_id=user_id,
-            from_chat_id=update.effective_chat.id,
-            message_id=update.message.message_id
-        )
+    try:
+        await context.bot.send_message(chat_id=uid, text=update.message.text)
+        sent = await update.message.reply_text("✅ Reply sent")
+        await asyncio.sleep(3)
+        try:
+            await sent.delete()
+        except:
+            pass
+    except:
+        await update.message.reply_text("❌ Failed to send reply.")
 
 # ========= BROADCAST =========
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,7 +119,9 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.bot_data["broadcast_msg"] = update.message.reply_to_message
-    await update.message.reply_text("Send /confirm to broadcast or /cancel")
+    await update.message.reply_text(
+        "📣 Broadcast panel opened\n\nSend /confirm to start\nSend /cancel to abort"
+    )
 
 async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -140,29 +129,50 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = context.bot_data.get("broadcast_msg")
     if not msg:
+        await update.message.reply_text("No broadcast message found.")
         return
 
     users = load_users()
+    total = len(users)
+    success = blocked = deleted = failed = 0
+
+    status = await update.message.reply_text("📡 Broadcasting started...")
+
     for uid in list(users):
         try:
-            await context.bot.copy_message(
-                chat_id=uid,
-                from_chat_id=msg.chat_id,
-                message_id=msg.message_id
-            )
+            await context.bot.copy_message(uid, msg.chat_id, msg.message_id)
+            success += 1
             await asyncio.sleep(0.05)
-        except:
+        except Forbidden:
+            blocked += 1
             users.discard(uid)
+        except BadRequest as e:
+            if "deactivated" in str(e).lower():
+                deleted += 1
+                users.discard(uid)
+            else:
+                failed += 1
+        except:
+            failed += 1
 
     save_users(users)
+
+    await status.edit_text(
+        f"✅ Broadcast completed\n\n"
+        f"Total Users: {total}\n"
+        f"Successful: {success}\n"
+        f"Blocked: {blocked}\n"
+        f"Deleted: {deleted}\n"
+        f"Failed: {failed}"
+    )
+
     context.bot_data.pop("broadcast_msg", None)
-    await update.message.reply_text("✅ Broadcast done")
 
 async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     context.bot_data.pop("broadcast_msg", None)
-    await update.message.reply_text("❌ Cancelled")
+    await update.message.reply_text("❌ Broadcast cancelled.")
 
 # ========= ADMIN PANEL =========
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,7 +199,11 @@ async def receive_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not action:
         return
 
-    uid = int(update.message.text)
+    try:
+        uid = int(update.message.text)
+    except:
+        await update.message.reply_text("Invalid ID")
+        return
 
     if action == "block":
         BLOCKED_USERS.add(uid)
@@ -200,22 +214,25 @@ async def receive_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data.pop("action", None)
 
-# ======= MAIN =======
+# ========= MAIN =========
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(on_button, pattern="^msg_admin$"))
+    app.add_handler(CallbackQueryHandler(button, pattern="msg_admin"))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID), handle_user_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), admin_reply))
+
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("confirm", confirm_broadcast))
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
     app.add_handler(CommandHandler("admin", admin_panel))
-    app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^(block|unblock)$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), receive_user_id))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & filters.User(ADMIN_ID), admin_reply))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
+    app.add_handler(CallbackQueryHandler(admin_buttons, pattern="block|unblock"))
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_ID), receive_user_id))
 
-    app.run_polling(drop_pending_updates=True)
+    print("Bot running...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
