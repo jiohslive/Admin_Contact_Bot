@@ -62,7 +62,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "msg_admin":
         await query.message.reply_text("Type your message below 👇")
 
-# ========= USER MESSAGE (TEXT / PHOTO / VIDEO / DOCS ALL) =========
+# ========= USER MESSAGE (ALL TYPES) =========
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -73,37 +73,28 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     users.add(user.id)
     save_users(users)
 
-    mention = f"<a href='tg://user?id={user.id}'>{user.full_name}</a>"
+    username = f"@{user.username}" if user.username else user.full_name
+    mention = f"<a href='tg://user?id={user.id}'>{username}</a>"
 
-    # Typing indicator to admin
     await context.bot.send_chat_action(chat_id=ADMIN_ID, action=ChatAction.TYPING)
 
-    # Username mention (clickable)
-    if user.username:
-        user_mention = f"@{user.username}"
-    else:
-        user_mention = f"<a href='tg://user?id={user.id}'>{user.full_name}</a>"
-
-    # Send formatted header to admin
     header = await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
             "📩 New Message From\n"
-            f"👤 User: {user_mention}\n"
-            f"🆔 User ID: {user.id}\n\n"
+            f"👤 User: {mention}\n"
+            f"🆔 User ID: <code>{user.id}</code>\n\n"
             "💬 User Message 👇"
         ),
         parse_mode="HTML"
     )
 
-    # Forward original message as it is (text / photo / video / doc)
     forwarded = await context.bot.copy_message(
         chat_id=ADMIN_ID,
         from_chat_id=update.effective_chat.id,
         message_id=update.message.message_id
     )
 
-    # Map admin reply to user (reply on ANY of these)
     ADMIN_REPLY_MAP[header.message_id] = user.id
     ADMIN_REPLY_MAP[forwarded.message_id] = user.id
 
@@ -119,17 +110,18 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     replied_id = update.message.reply_to_message.message_id
+    user_id = ADMIN_REPLY_MAP.get(replied_id)
 
-    if replied_id in ADMIN_REPLY_MAP:
-        user_id = ADMIN_REPLY_MAP[replied_id]
+    if not user_id:
+        return
 
-        await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+    await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
 
-        await context.bot.copy_message(
-            chat_id=user_id,
-            from_chat_id=update.effective_chat.id,
-            message_id=update.message.message_id
-        )
+    await context.bot.copy_message(
+        chat_id=user_id,
+        from_chat_id=update.effective_chat.id,
+        message_id=update.message.message_id
+    )
 
 # ========= BROADCAST =========
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -169,11 +161,9 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             success += 1
             await asyncio.sleep(0.05)
-
         except Forbidden:
             blocked += 1
             users.discard(uid)
-
         except BadRequest as e:
             if "deactivated" in str(e).lower():
                 deleted += 1
@@ -202,7 +192,7 @@ async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data.pop("broadcast_msg", None)
     await update.message.reply_text("❌ Broadcast cancelled.")
 
-# ========= ADMIN PANEL (BLOCK / UNBLOCK) =========
+# ========= ADMIN PANEL =========
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
