@@ -70,6 +70,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     blocked = load_blocked()
     if user_id in blocked:
+        await update.message.reply_text("🚫 You are blocked by the admin.")
         return
 
     if context.user_data.get("awaiting_msg"):
@@ -93,6 +94,8 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             pass
 
         context.user_data["awaiting_msg"] = False
+    else:
+        await update.message.reply_text("Tap 📩 Message Admin button first.")
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -106,20 +109,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = msg_map.get(original_msg_id)
 
     if not user_id:
-        return
-
-    if update.message.text == "/block":
-        blocked = load_blocked()
-        blocked.add(user_id)
-        save_blocked(blocked)
-        await update.message.reply_text("🚫 User blocked.")
-        return
-
-    if update.message.text == "/unblock":
-        blocked = load_blocked()
-        blocked.discard(user_id)
-        save_blocked(blocked)
-        await update.message.reply_text("✅ User unblocked.")
+        await update.message.reply_text("❌ Could not find the original user.")
         return
 
     try:
@@ -129,34 +119,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             message_id=update.message.message_id
         )
     except:
-        pass
-
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📣 Broadcast", callback_data="panel_broadcast")],
-        [InlineKeyboardButton("📊 Stats", callback_data="panel_stats")],
-    ])
-
-    await update.message.reply_text("🛠 Admin Panel", reply_markup=kb)
-
-async def panel_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    if query.data == "panel_stats":
-        users = load_users()
-        blocked = load_blocked()
-        await query.message.reply_text(
-            f"📊 Bot Stats\n\n"
-            f"◇ Total Users: {len(users)}\n"
-            f"◇ Blocked Users: {len(blocked)}"
-        )
+        await update.message.reply_text("⚠️ Failed to send message to user.")
 
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -184,7 +147,6 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users = load_users()
     blocked = load_blocked()
-
     users = users - blocked
 
     total = len(users)
@@ -204,18 +166,15 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             success += 1
             await asyncio.sleep(0.05)
-
         except Forbidden:
             blocked_cnt += 1
             users.discard(uid)
-
         except BadRequest as e:
             if "user is deactivated" in str(e).lower():
                 deleted += 1
                 users.discard(uid)
             else:
                 failed += 1
-
         except Exception:
             failed += 1
 
@@ -242,13 +201,11 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("panel", admin_panel))
-    app.add_handler(CallbackQueryHandler(panel_actions))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("confirm", confirm_broadcast))
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.User(ADMIN_ID), handle_user_message))
     app.add_handler(MessageHandler(filters.ALL & filters.User(ADMIN_ID), handle_admin_reply))
 
     app.run_polling()
