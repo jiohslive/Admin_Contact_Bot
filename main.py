@@ -200,8 +200,8 @@ async def receive_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data.pop("action", None)
 
-# ========= MAIN =========
-async def main():
+# ======= MAIN =======
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -215,7 +215,7 @@ async def main():
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & filters.User(ADMIN_ID), admin_reply))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
 
-    await app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
