@@ -20,7 +20,7 @@ USERS_FILE = "users.json"
 
 # ========= STORAGE =========
 BLOCKED_USERS = set()
-ADMIN_REPLY_MAP = {}  # admin_msg_id -> user_id
+ADMIN_REPLY_MAP = {}  # header_msg_id -> user_id
 
 # ========= USERS DB =========
 def load_users():
@@ -62,7 +62,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "msg_admin":
         await query.message.reply_text("Type your message below 👇")
 
-# ========= USER MESSAGE (ALL TYPES) =========
+# ========= USER MESSAGE =========
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -73,18 +73,17 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     users.add(user.id)
     save_users(users)
 
-    username = f"@{user.username}" if user.username else user.full_name
-    mention = f"<a href='tg://user?id={user.id}'>{username}</a>"
+    mention = f"<a href='tg://user?id={user.id}'>{user.full_name}</a>"
 
     await context.bot.send_chat_action(chat_id=ADMIN_ID, action=ChatAction.TYPING)
 
     header = await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
-            "📩 New Message From\n"
+            "📩 <b>New Message From</b>\n"
             f"👤 User: {mention}\n"
             f"🆔 User ID: <code>{user.id}</code>\n\n"
-            "💬 User Message 👇"
+            "💬 <b>User Message 👇</b>"
         ),
         parse_mode="HTML"
     )
@@ -95,11 +94,11 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         message_id=update.message.message_id
     )
 
+    # 👉 ONLY header is reply anchor
     ADMIN_REPLY_MAP[header.message_id] = user.id
-    ADMIN_REPLY_MAP[forwarded.message_id] = user.id
 
     status = await update.message.reply_text("✅ Message Sent")
-    asyncio.create_task(auto_delete(context, update.effective_chat.id, status.message_id, 5))
+    asyncio.create_task(auto_delete(context, update.effective_chat.id, status.message_id, 3))
 
 # ========= ADMIN REPLY =========
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,18 +109,17 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     replied_id = update.message.reply_to_message.message_id
-    user_id = ADMIN_REPLY_MAP.get(replied_id)
 
-    if not user_id:
-        return
+    if replied_id in ADMIN_REPLY_MAP:
+        user_id = ADMIN_REPLY_MAP[replied_id]
 
-    await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+        await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
 
-    await context.bot.copy_message(
-        chat_id=user_id,
-        from_chat_id=update.effective_chat.id,
-        message_id=update.message.message_id
-    )
+        await context.bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=update.effective_chat.id,
+            message_id=update.message.message_id
+        )
 
 # ========= BROADCAST =========
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -129,13 +127,11 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not update.message.reply_to_message:
-        await update.message.reply_text("Reply to any message with /broadcast to open panel.")
+        await update.message.reply_text("Reply to any message with /broadcast")
         return
 
     context.bot_data["broadcast_msg"] = update.message.reply_to_message
-    await update.message.reply_text(
-        "📣 Broadcast panel opened\n\nSend /confirm to start\nSend /cancel to abort"
-    )
+    await update.message.reply_text("📣 Broadcast ready\nSend /confirm to send\n/cancel to cancel")
 
 async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -143,14 +139,10 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = context.bot_data.get("broadcast_msg")
     if not msg:
-        await update.message.reply_text("No broadcast message found.")
         return
 
     users = load_users()
-    total = len(users)
-    success = blocked = deleted = failed = 0
-
-    status = await update.message.reply_text("📡 Broadcasting started...")
+    status = await update.message.reply_text("📡 Broadcasting...")
 
     for uid in list(users):
         try:
@@ -159,38 +151,18 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 from_chat_id=msg.chat_id,
                 message_id=msg.message_id
             )
-            success += 1
             await asyncio.sleep(0.05)
         except Forbidden:
-            blocked += 1
             users.discard(uid)
-        except BadRequest as e:
-            if "deactivated" in str(e).lower():
-                deleted += 1
-                users.discard(uid)
-            else:
-                failed += 1
         except:
-            failed += 1
+            pass
 
     save_users(users)
-
-    await status.edit_text(
-        "✅ Broadcast completed\n\n"
-        f"◇ Total Users: {total}\n"
-        f"◇ Successful: {success}\n"
-        f"◇ Blocked Users: {blocked}\n"
-        f"◇ Deleted Accounts: {deleted}\n"
-        f"◇ Unsuccessful: {failed}"
-    )
-
-    context.bot_data.pop("broadcast_msg", None)
+    await status.edit_text("✅ Broadcast Completed")
 
 async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
     context.bot_data.pop("broadcast_msg", None)
-    await update.message.reply_text("❌ Broadcast cancelled.")
+    await update.message.reply_text("❌ Broadcast cancelled")
 
 # ========= ADMIN PANEL =========
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -217,18 +189,14 @@ async def receive_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not action:
         return
 
-    try:
-        uid = int(update.message.text)
-    except:
-        await update.message.reply_text("Invalid ID")
-        return
+    uid = int(update.message.text)
 
     if action == "block":
         BLOCKED_USERS.add(uid)
-        await update.message.reply_text(f"🚫 User {uid} blocked.")
+        await update.message.reply_text(f"🚫 User {uid} blocked")
     elif action == "unblock":
         BLOCKED_USERS.discard(uid)
-        await update.message.reply_text(f"✅ User {uid} unblocked.")
+        await update.message.reply_text(f"✅ User {uid} unblocked")
 
     context.user_data.pop("action", None)
 
