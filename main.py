@@ -239,7 +239,7 @@ def run():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(msg_admin_button, pattern="msg_admin"))
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID), user_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID), handle_user_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), admin_reply))
 
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
