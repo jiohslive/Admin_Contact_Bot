@@ -1,29 +1,25 @@
-import os
-import json
 import asyncio
-import logging
+import json
+import os
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
 from telegram.error import Forbidden, BadRequest
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# ====== LOGGING ======
-logging.basicConfig(level=logging.INFO)
-
-# ====== ENV CONFIG ======
+# ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# ====== FILES ======
 USERS_FILE = "users.json"
-
-# ====== GLOBAL ======
 BLOCKED_USERS = set()
 
-# ====== USERS SAVE/LOAD ======
+if not BOT_TOKEN or not ADMIN_ID:
+    raise RuntimeError("Set BOT_TOKEN and ADMIN_ID in env variables")
+
+# ========= USER DB =========
 def load_users():
     if not os.path.exists(USERS_FILE):
         return set()
@@ -34,38 +30,62 @@ def save_users(users):
     with open(USERS_FILE, "w") as f:
         json.dump(list(users), f)
 
-# ====== START ======
+# ========= START =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     users.add(update.effective_user.id)
     save_users(users)
 
-    await update.message.reply_text("🤖 Bot started! Send me any message.")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📩 Message Admin", callback_data="msg_admin")]
+    ])
 
-# ====== USER MESSAGE ======
+    await update.message.reply_text(
+        "Welcome! 👋\n\nTap the button below to message the admin 👇",
+        reply_markup=kb
+    )
+
+# ========= BUTTON =========
+async def msg_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("✍️ Type your message:")
+
+# ========= USER → ADMIN =========
 async def user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-
-    if user.id in BLOCKED_USERS:
+    uid = update.effective_user.id
+    if uid in BLOCKED_USERS:
         return
+
+    users = load_users()
+    users.add(uid)
+    save_users(users)
 
     await context.bot.send_chat_action(chat_id=ADMIN_ID, action=ChatAction.TYPING)
 
-    text = update.message.text if update.message.text else "📎 Media received"
+    text = update.message.text
+
+    mention = f"<a href='tg://user?id={uid}'>User</a>"
 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
             "📩 New Message From\n"
-            f"👤 User: {user.first_name}\n"
-            f"🆔 User ID: {user.id}\n\n"
+            f"👤 User: {mention}\n"
+            f"🆔 User ID: {uid}\n\n"
             f"💬 {text}"
-        )
+        ),
+        parse_mode=ParseMode.HTML
     )
 
-    await update.message.reply_text("✅ Message sent to admin")
+    sent = await update.message.reply_text("✅ Message Sent To Admin")
+    await asyncio.sleep(3)
+    try:
+        await sent.delete()
+    except:
+        pass
 
-# ====== ADMIN REPLY ======
+# ========= ADMIN → USER REPLY =========
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -73,18 +93,32 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
         return
 
-    text = update.message.text
+    replied_text = update.message.reply_to_message.text or ""
+    uid = None
 
-    lines = update.message.reply_to_message.text.split("\n")
-    uid_line = [x for x in lines if "User ID:" in x]
+    for line in replied_text.splitlines():
+        if "User ID:" in line:
+            try:
+                uid = int(line.split("User ID:")[1].strip())
+            except:
+                pass
 
-    if not uid_line:
+    if not uid:
+        await update.message.reply_text("❌ User ID not found.")
         return
 
-    uid = int(uid_line[0].split(":")[1].strip())
-
     await context.bot.send_chat_action(chat_id=uid, action=ChatAction.TYPING)
-    await context.bot.send_message(chat_id=uid, text=text)
+
+    try:
+        await context.bot.send_message(chat_id=uid, text=update.message.text)
+        sent = await update.message.reply_text("✅ Reply sent")
+        await asyncio.sleep(3)
+        try:
+            await sent.delete()
+        except:
+            pass
+    except:
+        await update.message.reply_text("❌ Failed to send reply.")
 
 # ========= BROADCAST =========
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,11 +151,7 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for uid in list(users):
         try:
-            await context.bot.copy_message(
-                chat_id=uid,
-                from_chat_id=msg.chat_id,
-                message_id=msg.message_id
-            )
+            await context.bot.copy_message(uid, msg.chat_id, msg.message_id)
             success += 1
             await asyncio.sleep(0.05)
         except Forbidden:
@@ -144,7 +174,7 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"◇ Successful: {success}\n"
         f"◇ Blocked Users: {blocked}\n"
         f"◇ Deleted Accounts: {deleted}\n"
-        f"◇ Unsuccessful: {failed}"
+        f"◇ Failed: {failed}"
     )
 
     context.bot_data.pop("broadcast_msg", None)
@@ -195,23 +225,25 @@ async def receive_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data.pop("action", None)
 
-# ====== MAIN ======
+# ========= RUN =========
 def run():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(msg_admin_button, pattern="msg_admin"))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID), user_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), admin_reply))
+
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("confirm", confirm_broadcast))
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
     app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CallbackQueryHandler(admin_buttons, pattern="block|unblock"))
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_ID), receive_user_id))
 
-    app.add_handler(CallbackQueryHandler(admin_buttons))
-    app.add_handler(MessageHandler(filters.TEXT & filters.REPLY & filters.User(user_id=ADMIN_ID), admin_reply))
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(user_id=ADMIN_ID), receive_user_id))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.User(user_id=ADMIN_ID), user_message))
-
+    print("🤖 Bot running...")
     app.run_polling(close_loop=False)
-
 
 if __name__ == "__main__":
     run()
