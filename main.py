@@ -52,8 +52,17 @@ async def msg_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("✍️ Type your message:")
 
 # ========= USER → ADMIN =========
-async def user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+from telegram.constants import ParseMode
+
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+
+    # clickable account name (NO username)
+    user = update.effective_user
+    name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "User"
+    mention = f"<a href='tg://user?id={uid}'>{name}</a>"
+
     if uid in BLOCKED_USERS:
         return
 
@@ -65,26 +74,24 @@ async def user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
-    mention = f"<a href='tg://user?id={uid}'>User</a>"
-
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
             "📩 New Message From\n"
             f"👤 User: {mention}\n"
-            f"🆔 User ID: {uid}\n\n"
+            f"🆔 User ID: <code>{uid}</code>\n\n"
             f"💬 {text}"
         ),
         parse_mode=ParseMode.HTML
     )
 
-    sent = await update.message.reply_text("✅ Message Sent To Admin")
+    sent = await update.message.reply_text("✅ Message sent to admin")
     await asyncio.sleep(3)
     try:
         await sent.delete()
     except:
         pass
-
+        
 # ========= ADMIN → USER REPLY =========
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
