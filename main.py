@@ -7,6 +7,7 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 from telegram.error import Forbidden, BadRequest
+from telegram.constants import ChatAction
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -15,16 +16,29 @@ if not BOT_TOKEN or not ADMIN_ID:
     raise RuntimeError("Please set BOT_TOKEN and ADMIN_ID environment variables.")
 
 USERS_FILE = "users.json"
+BLOCKED_FILE = "blocked.json"
+
+def load_json(path, default):
+    if not os.path.exists(path):
+        return default
+    with open(path, "r") as f:
+        return json.load(f)
+
+def save_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f)
 
 def load_users():
-    if not os.path.exists(USERS_FILE):
-        return set()
-    with open(USERS_FILE, "r") as f:
-        return set(json.load(f))
+    return set(load_json(USERS_FILE, []))
 
 def save_users(users: set):
-    with open(USERS_FILE, "w") as f:
-        json.dump(list(users), f)
+    save_json(USERS_FILE, list(users))
+
+def load_blocked():
+    return set(load_json(BLOCKED_FILE, []))
+
+def save_blocked(blocked: set):
+    save_json(BLOCKED_FILE, list(blocked))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
@@ -42,34 +56,107 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     if query.data == "msg_admin":
-        await query.message.reply_text("You can send your message now. I will forward everything to the admin.")
+        context.user_data["awaiting_msg"] = True
+        await query.message.reply_text("Type your message below. I will forward it to the admin 👇")
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
     users = load_users()
-    users.add(update.effective_user.id)
+    users.add(user_id)
     save_users(users)
 
-    # Ignore admin's own messages
-    if update.effective_user.id == ADMIN_ID:
+    blocked = load_blocked()
+    if user_id in blocked:
         return
 
-    # Forward ANY message to admin
-    await context.bot.forward_message(
-        chat_id=ADMIN_ID,
-        from_chat_id=update.message.chat_id,
-        message_id=update.message.message_id
-    )
+    if context.user_data.get("awaiting_msg"):
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        await asyncio.sleep(1)
 
-    # Confirmation to user
-    sent_msg = await update.message.reply_text("Message Sent ✅")
+        forwarded = await context.bot.forward_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=update.message.chat_id,
+            message_id=update.message.message_id
+        )
 
-    # Auto delete confirmation after 5 seconds
-    await asyncio.sleep(3)
+        context.bot_data.setdefault("msg_map", {})
+        context.bot_data["msg_map"][forwarded.message_id] = user_id
+
+        sent_msg = await update.message.reply_text("Message Sent ✅")
+        await asyncio.sleep(3)
+        try:
+            await sent_msg.delete()
+        except:
+            pass
+
+        context.user_data["awaiting_msg"] = False
+
+async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    if not update.message.reply_to_message:
+        return
+
+    msg_map = context.bot_data.get("msg_map", {})
+    original_msg_id = update.message.reply_to_message.message_id
+    user_id = msg_map.get(original_msg_id)
+
+    if not user_id:
+        return
+
+    if update.message.text == "/block":
+        blocked = load_blocked()
+        blocked.add(user_id)
+        save_blocked(blocked)
+        await update.message.reply_text("🚫 User blocked.")
+        return
+
+    if update.message.text == "/unblock":
+        blocked = load_blocked()
+        blocked.discard(user_id)
+        save_blocked(blocked)
+        await update.message.reply_text("✅ User unblocked.")
+        return
+
     try:
-        await sent_msg.delete()
+        await context.bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=update.message.chat_id,
+            message_id=update.message.message_id
+        )
     except:
         pass
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📣 Broadcast", callback_data="panel_broadcast")],
+        [InlineKeyboardButton("📊 Stats", callback_data="panel_stats")],
+    ])
+
+    await update.message.reply_text("🛠 Admin Panel", reply_markup=kb)
+
+async def panel_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    if query.data == "panel_stats":
+        users = load_users()
+        blocked = load_blocked()
+        await query.message.reply_text(
+            f"📊 Bot Stats\n\n"
+            f"◇ Total Users: {len(users)}\n"
+            f"◇ Blocked Users: {len(blocked)}"
+        )
 
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -96,10 +183,13 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     users = load_users()
+    blocked = load_blocked()
+
+    users = users - blocked
 
     total = len(users)
     success = 0
-    blocked = 0
+    blocked_cnt = 0
     deleted = 0
     failed = 0
 
@@ -116,7 +206,7 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.05)
 
         except Forbidden:
-            blocked += 1
+            blocked_cnt += 1
             users.discard(uid)
 
         except BadRequest as e:
@@ -135,7 +225,7 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Broadcast completed\n\n"
         f"◇ Total Users: {total}\n"
         f"◇ Successful: {success}\n"
-        f"◇ Blocked Users: {blocked}\n"
+        f"◇ Blocked Users: {blocked_cnt}\n"
         f"◇ Deleted Accounts: {deleted}\n"
         f"◇ Unsuccessful: {failed}"
     )
@@ -152,13 +242,14 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("panel", admin_panel))
+    app.add_handler(CallbackQueryHandler(panel_actions))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("confirm", confirm_broadcast))
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
-
-    # IMPORTANT: Only ONE MessageHandler
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
+    app.add_handler(MessageHandler(filters.ALL & filters.User(ADMIN_ID), handle_admin_reply))
 
     app.run_polling()
 
