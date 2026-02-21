@@ -43,31 +43,33 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.data == "msg_admin":
-        context.user_data["awaiting_msg"] = True
-        await query.message.reply_text("Type your message below. I will forward it to the admin 👇")
+        await query.message.reply_text("You can send your message now. I will forward everything to the admin.")
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     users.add(update.effective_user.id)
     save_users(users)
 
-    if context.user_data.get("awaiting_msg"):
-        user = update.effective_user
+    # Ignore admin's own messages
+    if update.effective_user.id == ADMIN_ID:
+        return
 
-        await context.bot.forward_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=update.message.chat_id,
-            message_id=update.message.message_id
-        )
+    # Forward ANY message to admin
+    await context.bot.forward_message(
+        chat_id=ADMIN_ID,
+        from_chat_id=update.message.chat_id,
+        message_id=update.message.message_id
+    )
 
-        sent_msg = await update.message.reply_text("Message Sent ✅")
-        await asyncio.sleep(10)
-        try:
-            await sent_msg.delete()
-        except:
-            pass
+    # Confirmation to user
+    sent_msg = await update.message.reply_text("Message Sent ✅")
 
-        context.user_data["awaiting_msg"] = False
+    # Auto delete confirmation after 5 seconds
+    await asyncio.sleep(5)
+    try:
+        await sent_msg.delete()
+    except:
+        pass
 
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -154,6 +156,8 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("confirm", confirm_broadcast))
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
+
+    # IMPORTANT: Only ONE MessageHandler
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
 
     app.run_polling()
