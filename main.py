@@ -65,7 +65,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     sent_msg = await update.message.reply_text("Message Sent ✅")
 
     # Auto delete confirmation after 5 seconds
-    await asyncio.sleep(5)
+    await asyncio.sleep(3)
     try:
         await sent_msg.delete()
     except:
