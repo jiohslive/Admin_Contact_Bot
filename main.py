@@ -66,7 +66,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     users.add(uid)
     save_users(users)
 
-    # ✅ Typing indicator to admin
+    # ✅ Typing indicator to admin (ADDED)
     await context.bot.send_chat_action(chat_id=ADMIN_ID, action=ChatAction.TYPING)
 
     text = update.message.text
@@ -83,7 +83,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
     sent = await update.message.reply_text("✅ Message sent to admin")
-    await asyncio.sleep(3)   # ⏱️ proper delay
+    await asyncio.sleep(4)
     try:
         await sent.delete()
     except:
@@ -111,13 +111,13 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ User ID not found.")
         return
 
-    # ✅ Typing indicator to user
+    # ✅ Typing indicator to user (ADDED)
     await context.bot.send_chat_action(chat_id=uid, action=ChatAction.TYPING)
 
     try:
         await context.bot.send_message(chat_id=uid, text=update.message.text)
         sent = await update.message.reply_text("✅ Reply sent")
-        await asyncio.sleep(3)
+        await asyncio.sleep(4)
         try:
             await sent.delete()
         except:
@@ -204,11 +204,11 @@ async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Invalid user id")
 
-async def unlock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def unblock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     if not context.args:
-        await update.message.reply_text("Usage: /unlock <user_id>")
+        await update.message.reply_text("Usage: /unblock <user_id>")
         return
     try:
         uid = int(context.args[0])
@@ -232,7 +232,7 @@ def run():
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
 
     app.add_handler(CommandHandler("block", block_cmd))
-    app.add_handler(CommandHandler("unlock", unlock_cmd))
+    app.add_handler(CommandHandler("unlock", unblock_cmd))
 
     print("🤖 Bot running...")
     app.run_polling(close_loop=False)
