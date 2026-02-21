@@ -78,23 +78,34 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Typing indicator to admin
     await context.bot.send_chat_action(chat_id=ADMIN_ID, action=ChatAction.TYPING)
 
-    # Forward original message
-    sent = await context.bot.copy_message(
+    # Username mention (clickable)
+    if user.username:
+        user_mention = f"@{user.username}"
+    else:
+        user_mention = f"<a href='tg://user?id={user.id}'>{user.full_name}</a>"
+
+    # Send formatted header to admin
+    header = await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            "📩 New Message From\n"
+            f"👤 User: {user_mention}\n"
+            f"🆔 User ID: {user.id}\n\n"
+            "💬 User Message 👇"
+        ),
+        parse_mode="HTML"
+    )
+
+    # Forward original message as it is (text / photo / video / doc)
+    forwarded = await context.bot.copy_message(
         chat_id=ADMIN_ID,
         from_chat_id=update.effective_chat.id,
         message_id=update.message.message_id
     )
 
-    # Send user info separately (mention format)
-    info = await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"👤 User: {mention}\n🆔 ID: {user.id}",
-        parse_mode="HTML"
-    )
-
-    # Map admin reply to user
-    ADMIN_REPLY_MAP[sent.message_id] = user.id
-    ADMIN_REPLY_MAP[info.message_id] = user.id
+    # Map admin reply to user (reply on ANY of these)
+    ADMIN_REPLY_MAP[header.message_id] = user.id
+    ADMIN_REPLY_MAP[forwarded.message_id] = user.id
 
     status = await update.message.reply_text("✅ Message Sent")
     asyncio.create_task(auto_delete(context, update.effective_chat.id, status.message_id, 5))
