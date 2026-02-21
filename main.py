@@ -57,10 +57,18 @@ async def user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Direct forward without forcing button click
-    sent = await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"📩 New Message\n\n👤 User: {user.full_name}\n🆔 ID: {user.id}\n\n💬 {text}"
-    )
+    mention = f"<a href='tg://user?id={user.id}'>{user.full_name}</a>"
+
+sent = await context.bot.send_message(
+    chat_id=ADMIN_ID,
+    text=(
+        "📩 New Message\n\n"
+        f"👤 User: {mention}\n"
+        f"🆔 ID: {user.id}\n\n"
+        f"💬 {text or ''}"
+    ),
+    parse_mode="HTML"
+)
 
     ADMIN_REPLY_MAP[sent.message_id] = user.id
 
