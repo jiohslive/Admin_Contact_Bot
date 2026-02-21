@@ -59,22 +59,22 @@ async def user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Direct forward without forcing button click
     mention = f"<a href='tg://user?id={user.id}'>{user.full_name}</a>"
 
-sent = await context.bot.send_message(
-    chat_id=ADMIN_ID,
-    text=(
-        "📩 New Message\n\n"
-        f"👤 User: {mention}\n"
-        f"🆔 ID: {user.id}\n\n"
-        f"💬 {text or ''}"
-    ),
-    parse_mode="HTML"
-)
+    sent = await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            "📩 New Message\n\n"
+            f"👤 User: {mention}\n"
+            f"🆔 ID: {user.id}\n\n"
+            f"💬 {text or ''}"
+        ),
+        parse_mode="HTML"
+    )
 
     ADMIN_REPLY_MAP[sent.message_id] = user.id
 
     status = await update.message.reply_text("✅ Message sent")
     asyncio.create_task(auto_delete(context, update.effective_chat.id, status.message_id))
-
+    
 
 # ========= ADMIN REPLY =========
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
