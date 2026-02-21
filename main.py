@@ -52,13 +52,9 @@ async def msg_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("✍️ Type your message:")
 
 # ========= USER → ADMIN =========
-
-from telegram.constants import ParseMode
-
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
-    # clickable account name (NO username)
     user = update.effective_user
     name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "User"
     mention = f"<a href='tg://user?id={uid}'>{name}</a>"
@@ -70,6 +66,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     users.add(uid)
     save_users(users)
 
+    # ✅ Typing indicator to admin
     await context.bot.send_chat_action(chat_id=ADMIN_ID, action=ChatAction.TYPING)
 
     text = update.message.text
@@ -86,12 +83,12 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
     sent = await update.message.reply_text("✅ Message sent to admin")
-    await asyncio.sleep(3)
+    await asyncio.sleep(3)   # ⏱️ proper delay
     try:
         await sent.delete()
     except:
         pass
-        
+
 # ========= ADMIN → USER REPLY =========
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -106,7 +103,7 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for line in replied_text.splitlines():
         if "User ID:" in line:
             try:
-                uid = int(line.split("User ID:")[1].strip())
+                uid = int(line.split("User ID:")[1].strip().replace("</code>", "").replace("<code>", ""))
             except:
                 pass
 
@@ -114,6 +111,7 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ User ID not found.")
         return
 
+    # ✅ Typing indicator to user
     await context.bot.send_chat_action(chat_id=uid, action=ChatAction.TYPING)
 
     try:
@@ -192,45 +190,32 @@ async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data.pop("broadcast_msg", None)
     await update.message.reply_text("❌ Broadcast cancelled.")
 
-# ========= ADMIN PANEL =========
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ========= BLOCK / UNLOCK COMMANDS =========
+async def block_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚫 Block User", callback_data="block")],
-        [InlineKeyboardButton("✅ Unblock User", callback_data="unblock")]
-    ])
-    await update.message.reply_text("Admin Panel:", reply_markup=kb)
-
-async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data["action"] = query.data
-    await query.message.reply_text("Send User ID:")
-
-async def receive_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if not context.args:
+        await update.message.reply_text("Usage: /block <user_id>")
         return
-
-    action = context.user_data.get("action")
-    if not action:
-        return
-
     try:
-        uid = int(update.message.text)
-    except:
-        await update.message.reply_text("Invalid ID")
-        return
-
-    if action == "block":
+        uid = int(context.args[0])
         BLOCKED_USERS.add(uid)
         await update.message.reply_text(f"🚫 User {uid} blocked.")
-    elif action == "unblock":
+    except:
+        await update.message.reply_text("Invalid user id")
+
+async def unlock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /unlock <user_id>")
+        return
+    try:
+        uid = int(context.args[0])
         BLOCKED_USERS.discard(uid)
         await update.message.reply_text(f"✅ User {uid} unblocked.")
-
-    context.user_data.pop("action", None)
+    except:
+        await update.message.reply_text("Invalid user id")
 
 # ========= RUN =========
 def run():
@@ -240,14 +225,14 @@ def run():
     app.add_handler(CallbackQueryHandler(msg_admin_button, pattern="msg_admin"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID), handle_user_message))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), admin_reply))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID) & filters.REPLY, admin_reply))
 
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("confirm", confirm_broadcast))
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
-    app.add_handler(CommandHandler("admin", admin_panel))
-    app.add_handler(CallbackQueryHandler(admin_buttons, pattern="block|unblock"))
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_ID), receive_user_id))
+
+    app.add_handler(CommandHandler("block", block_cmd))
+    app.add_handler(CommandHandler("unlock", unlock_cmd))
 
     print("🤖 Bot running...")
     app.run_polling(close_loop=False)
